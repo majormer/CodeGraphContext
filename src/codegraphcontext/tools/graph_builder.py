@@ -74,6 +74,9 @@ class TreeSitterParser:
         elif self.language_name == 'haskell':
             from .languages.haskell import HaskellTreeSitterParser
             self.language_specific_parser = HaskellTreeSitterParser(self)
+        elif self.language_name == 'dart':
+            from .languages.dart import DartTreeSitterParser
+            self.language_specific_parser = DartTreeSitterParser(self)
 
 
 
@@ -120,6 +123,7 @@ class GraphBuilder:
             '.sc': TreeSitterParser('scala'),
             '.swift': TreeSitterParser('swift'),
             '.hs': TreeSitterParser('haskell'),
+            '.dart': TreeSitterParser('dart'),
         }
         self.create_schema()
 
@@ -249,6 +253,9 @@ class GraphBuilder:
         if '.swift' in files_by_lang:
             from .languages import swift as swift_lang_module
             imports_map.update(swift_lang_module.pre_scan_swift(files_by_lang['.swift'], self.parsers['.swift']))
+        if '.dart' in files_by_lang:
+            from .languages import dart as dart_lang_module
+            imports_map.update(dart_lang_module.pre_scan_dart(files_by_lang['.dart'], self.parsers['.dart']))
             
         return imports_map
 

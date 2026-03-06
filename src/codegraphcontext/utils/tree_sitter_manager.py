@@ -51,6 +51,7 @@ LANGUAGE_ALIASES = {
     ".scala": "scala",
     "swift": "swift",
     ".swift": "swift",
+    "dart": "dart",
 }
 
 
