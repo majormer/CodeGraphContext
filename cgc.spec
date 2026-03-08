@@ -150,11 +150,22 @@ if is_win:
 elif is_mac:
     ext = '*.dylib'
 
+def find_pkg_dir(name):
+    for p in sys.path:
+        if not p: continue
+        d = Path(p) / name
+        if d.exists():
+            return d
+    return None
+
 def add_binary(package_path, pattern, target_subdir=None):
-    pkg_dir = site_packages / package_path
-    if pkg_dir.exists():
+    pkg_dir = find_pkg_dir(package_path)
+    if pkg_dir:
         for f in pkg_dir.glob(pattern):
-            binaries.append((str(f), target_subdir or package_path))
+            if f.is_file():
+                binaries.append((str(f), target_subdir or package_path))
+    else:
+        print(f"Warning: Could not find package directory: {package_path}")
 
 # tree-sitter core
 add_binary('tree_sitter', ext)
@@ -181,8 +192,11 @@ if not is_win:
         hidden_imports += t_hiddenimports
     
     # Specific additions for falkordblite
-    add_binary('falkordblite.scripts', ext)
+    # Ensure helper libraries are available at root for easier discovery
+    add_binary('falkordblite.libs', '*', '.')
     add_binary('falkordblite.libs', '*')
+    add_binary('falkordblite.scripts', ext, '.')
+    add_binary('falkordblite.scripts', ext)
 
 # stdlibs: dynamically imports py3.py, py312.py, etc. via importlib
 stdlibs_dir = site_packages / 'stdlibs'

@@ -45,16 +45,38 @@ def run_worker():
         
         from redislite.falkordb_client import FalkorDB
         
+        # Determine module path for frozen bundles
+        server_config = {}
+        if getattr(sys, 'frozen', False):
+            mei_pass = getattr(sys, '_MEIPASS', os.path.dirname(sys.executable))
+            
+            # Potential locations in the bundle
+            potential_paths = [
+                os.path.join(mei_pass, 'redislite', 'bin', 'falkordb.so'),
+                os.path.join(mei_pass, 'falkordblite.scripts', 'falkordb.so'),
+                os.path.join(mei_pass, 'falkordb.so'),
+            ]
+            
+            module_path = None
+            for p in potential_paths:
+                if os.path.exists(p):
+                    module_path = p
+                    break
+            
+            if module_path:
+                logger.info(f"Using FalkorDB module from bundle: {module_path}")
+                server_config['loadmodule'] = module_path
+            else:
+                logger.warning("Could not find falkordb.so in bundle. Falling back to automatic discovery.")
+
         # Start Embedded DB
-        # Note: redislite might raise error if socket is in use/locked.
-        # Ideally we clean up stale socket if check fails.
         if os.path.exists(socket_path):
             try:
                 os.remove(socket_path)
             except OSError:
                 pass
 
-        db_instance = FalkorDB(db_path, unix_socket_path=socket_path)
+        db_instance = FalkorDB(db_path, unix_socket_path=socket_path, serverconfig=server_config)
         logger.info("FalkorDB Lite is running.")
         
         # Keep alive loop

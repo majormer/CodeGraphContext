@@ -32,7 +32,8 @@ def _is_falkordb_available() -> bool:
     if sys.version_info < (3, 12):
         return False
     try:
-        return importlib.util.find_spec("redislite") is not None
+        import redislite
+        return hasattr(redislite, 'falkordb_client')
     except ImportError:
         return False
 
