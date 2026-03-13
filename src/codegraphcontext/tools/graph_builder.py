@@ -498,8 +498,84 @@ class GraphBuilder:
             row = result.single()
             return row is not None and row.get('created', 0) > 0
         except Exception as e:
-            # Optionally log, but suppress to allow fallback
+            debug_log(f"_safe_run_create failed: {e} | params={params.get('caller_name','?')}->{params.get('called_name','?')}")
             return False
+
+    def _create_cpp_function_calls(self, session, file_data: Dict, imports_map: dict):
+        """Create CALLS relationships for C/C++ files using direct symbol lookup.
+        
+        Optimized for large UE5 codebases:
+        - Pre-filters calls to only known symbols (in imports_map or local)
+        - Uses a single combined query with global fallback instead of two sequential queries
+        - Skips noise (single-char names, common operators)
+        """
+        caller_file_path = str(Path(file_data['path']).resolve())
+        calls = file_data.get('function_calls', [])
+        if not calls:
+            return
+
+        debug_log(f"[C++] Creating function calls for {caller_file_path} (Count: {len(calls)})")
+
+        local_names = {f['name'] for f in file_data.get('functions', [])} | \
+                      {c['name'] for c in file_data.get('classes', [])}
+        
+        # Build set of all known function names for fast pre-filtering
+        known_symbols = set(imports_map.keys()) | local_names
+        
+        created_count = 0
+        skipped = 0
+
+        for call in calls:
+            called_name = call['name']
+            if not called_name or len(called_name) <= 1:
+                continue
+
+            # Pre-filter: skip calls to unknown symbols (not in any indexed file)
+            if called_name not in known_symbols:
+                skipped += 1
+                continue
+
+            # Resolve caller function name from context
+            caller_context = call.get('context')
+            if not caller_context or len(caller_context) != 3 or caller_context[0] is None:
+                continue
+
+            caller_name = caller_context[0]
+            # Skip if caller is also unknown (shouldn't happen but defensive)
+            if caller_name not in known_symbols:
+                skipped += 1
+                continue
+
+            full_call_name = call.get('full_name', called_name)
+            line_number = call['line_number']
+
+            # args must be STRING[] for KùzuDB CALLS schema
+            raw_args = call.get('args', [])
+            args_list = [str(a) for a in raw_args] if isinstance(raw_args, list) and raw_args else []
+
+            call_params = {
+                'caller_name': caller_name,
+                'caller_file_path': caller_file_path,
+                'called_name': called_name,
+                'line_number': line_number,
+                'args': args_list,
+                'full_call_name': full_call_name,
+            }
+
+            # Single query: match caller by name+path, callee by name only (global)
+            # This avoids needing two sequential queries and works for cross-file calls
+            if self._safe_run_create(session, """
+                OPTIONAL MATCH (caller:Function {name: $caller_name, path: $caller_file_path})
+                OPTIONAL MATCH (called:Function {name: $called_name})
+                WITH caller, called
+                WHERE caller IS NOT NULL AND called IS NOT NULL
+                MERGE (caller)-[:CALLS {line_number: $line_number, args: $args, full_call_name: $full_call_name}]->(called)
+                RETURN count(*) as created
+            """, call_params):
+                created_count += 1
+
+        if created_count > 0 or skipped > 0:
+            debug_log(f"[C++] {caller_file_path}: created={created_count}, skipped={skipped}")
 
     def _create_function_calls(self, session, file_data: Dict, imports_map: dict):
         """Create CALLS relationships with a unified, prioritized logic flow for all call types."""
@@ -739,7 +815,11 @@ class GraphBuilder:
         with self.driver.session() as session:
             for idx, file_data in enumerate(all_file_data):
                 debug_log(f"Processing file {idx+1}/{len(all_file_data)}: {file_data.get('path', 'unknown')}")
-                self._create_function_calls(session, file_data, imports_map)
+                lang = file_data.get('lang', '')
+                if lang in ('cpp', 'c'):
+                    self._create_cpp_function_calls(session, file_data, imports_map)
+                else:
+                    self._create_function_calls(session, file_data, imports_map)
 
     def _create_inheritance_links(self, session, file_data: Dict, imports_map: dict):
         """Create INHERITS relationships with a more robust resolution logic."""
@@ -1299,7 +1379,11 @@ class GraphBuilder:
                         self.job_manager.update_job(job_id, processed_files=processed_count)
                     await asyncio.sleep(0.01)
 
-            self._create_all_inheritance_links(all_file_data, imports_map)
+            try:
+                self._create_all_inheritance_links(all_file_data, imports_map)
+            except Exception as e:
+                warning_logger(f"Inheritance link creation failed (non-fatal): {e}")
+
             self._create_all_function_calls(all_file_data, imports_map)
             
             if job_id:
